@@ -6,7 +6,7 @@ connections compatible with Ray Data's read_sql and write_sql methods.
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 
 def _check_gpudb():
@@ -15,11 +15,11 @@ def _check_gpudb():
         from gpudb import dbapi
 
         return dbapi
-    except ImportError:
+    except ImportError as e:
         raise ImportError(
             "gpudb is required to use Kinetica SQL integration. "
             "Install it with: pip install gpudb"
-        )
+        ) from e
 
 
 @dataclass
@@ -51,7 +51,7 @@ class KineticaConnectionFactory:
     password: Optional[str] = None
     oauth_token: Optional[str] = None
     default_schema: Optional[str] = None
-    options: Optional[Dict[str, Any]] = None
+    options: Optional[dict[str, Any]] = None
 
     def __call__(self):
         """
@@ -78,7 +78,7 @@ def create_kinetica_connection_factory(
     password: Optional[str] = None,
     oauth_token: Optional[str] = None,
     default_schema: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
 ) -> Callable:
     """
     Create a connection factory for use with Ray Data's SQL methods.

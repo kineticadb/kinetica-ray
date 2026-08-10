@@ -6,9 +6,10 @@ to Kinetica databases.
 """
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ray.data._internal.execution.interfaces import TaskContext
 from ray.data._internal.util import _check_import
@@ -49,10 +50,10 @@ class KineticaTableSettings:
     ttl: int = -1
     """Time-to-live in minutes. -1 means no expiration."""
 
-    primary_keys: List[str] = field(default_factory=list)
+    primary_keys: list[str] = field(default_factory=list)
     """List of column names to use as primary key."""
 
-    shard_keys: List[str] = field(default_factory=list)
+    shard_keys: list[str] = field(default_factory=list)
     """List of column names to use as shard key."""
 
     persist: bool = True
@@ -97,7 +98,7 @@ class KineticaDatasink(Datasink):
         table_settings: Optional[KineticaTableSettings] = None,
         batch_size: int = 10000,
         use_multihead: bool = True,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize the Kinetica datasink.
@@ -150,9 +151,9 @@ class KineticaDatasink(Datasink):
         self._options = options or {}
 
         # Serializable column definitions
-        self._column_defs: Optional[List[Dict[str, Any]]] = None
+        self._column_defs: Optional[list[dict[str, Any]]] = None
         self._schema_string: Optional[str] = None
-        self._column_properties: Optional[Dict[str, List[str]]] = None
+        self._column_properties: Optional[dict[str, list[str]]] = None
 
         # Track whether table setup has been performed
         self._table_initialized: bool = False
@@ -177,11 +178,8 @@ class KineticaDatasink(Datasink):
             if self._schema is None:
                 raise GPUdbException("Schema must be provided when using mode='create'")
 
-        elif self._mode == KineticaSinkMode.OVERWRITE:
-            if self._schema is None:
-                raise GPUdbException(
-                    "Schema must be provided when using mode='overwrite'"
-                )
+        elif self._mode == KineticaSinkMode.OVERWRITE and self._schema is None:
+            raise GPUdbException("Schema must be provided when using mode='overwrite'")
         # APPEND mode: schema is optional (can use existing table schema)
 
     def _initialize_table(self) -> None:
@@ -270,7 +268,7 @@ class KineticaDatasink(Datasink):
             options=self._options,
         )
 
-    def _columns_to_dicts(self, columns) -> List[Dict[str, Any]]:
+    def _columns_to_dicts(self, columns) -> list[dict[str, Any]]:
         """Convert GPUdbRecordColumn objects to serializable dicts."""
         result = []
         for col in columns:
@@ -288,7 +286,7 @@ class KineticaDatasink(Datasink):
             result.append(col_dict)
         return result
 
-    def _dicts_to_columns(self, dicts: List[Dict[str, Any]]):
+    def _dicts_to_columns(self, dicts: list[dict[str, Any]]):
         """Convert serializable dicts back to GPUdbRecordColumn objects.
 
         Note: precision and scale for decimal columns are stored in the dict
@@ -384,7 +382,7 @@ class KineticaDatasink(Datasink):
             ) from e
 
     def _create_table(
-        self, client: "GPUdb", columns: List, *, fail_if_exists: bool = False
+        self, client: "GPUdb", columns: list, *, fail_if_exists: bool = False
     ) -> "GPUdbRecordType":
         """Create the target table with the given column definitions.
 
@@ -594,8 +592,7 @@ class KineticaDatasink(Datasink):
                 ) from e
             else:
                 logger.warning(
-                    "Could not create GPUdbTable, falling back to "
-                    f"direct insert: {e}"
+                    f"Could not create GPUdbTable, falling back to direct insert: {e}"
                 )
                 return None
 
@@ -703,8 +700,8 @@ class KineticaDatasink(Datasink):
         }
 
     def _write_with_gpudb_table(
-        self, gpudb_table: Any, records: List[Dict[str, Any]]
-    ) -> List[str]:
+        self, gpudb_table: Any, records: list[dict[str, Any]]
+    ) -> list[str]:
         """Write records using GPUdbTable.
 
         With flush_multi_head_ingest_per_insertion=False, records are buffered
@@ -773,7 +770,7 @@ class KineticaDatasink(Datasink):
 
         return errors
 
-    def _write_simple(self, client, records: List[Dict[str, Any]]) -> tuple:
+    def _write_simple(self, client, records: list[dict[str, Any]]) -> tuple:
         """Write records using simple insert_records API with JSON encoding.
 
         Note: Kinetica is not a transactional database. Each batch is committed

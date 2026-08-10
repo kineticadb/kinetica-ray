@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
-
 from kinetica_ray.datasink import (
     KineticaDatasink,
     KineticaSinkMode,
@@ -174,9 +173,7 @@ class TestKineticaDatasource:
     @pytest.fixture
     def datasource(self):
         """Create a KineticaDatasource with test parameters."""
-        with patch(
-            "kinetica_ray.datasource.KineticaDatasource._init_client"
-        ):
+        with patch("kinetica_ray.datasource.KineticaDatasource._init_client"):
             ds = KineticaDatasource(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -199,9 +196,7 @@ class TestKineticaDatasource:
 
     def test_default_batch_size(self):
         """Test default batch size."""
-        with patch(
-            "kinetica_ray.datasource.KineticaDatasource._init_client"
-        ):
+        with patch("kinetica_ray.datasource.KineticaDatasource._init_client"):
             ds = KineticaDatasource(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -335,9 +330,7 @@ class TestKineticaDatasink:
     @pytest.fixture
     def datasink(self):
         """Create a KineticaDatasink with test parameters."""
-        with patch(
-            "kinetica_ray.datasink.KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -359,9 +352,7 @@ class TestKineticaDatasink:
     def test_string_mode(self):
         """Test datasink accepts string mode values."""
         schema = pa.schema([pa.field("id", pa.int64())])
-        with patch(
-            "kinetica_ray.datasink.KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -380,9 +371,7 @@ class TestKineticaDatasink:
             shard_keys=["region"],
         )
 
-        with patch(
-            "kinetica_ray.datasink.KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -448,9 +437,7 @@ class TestKineticaDatasink:
         )
 
     @patch.object(KineticaDatasink, "_init_client")
-    @patch(
-        "kinetica_ray.type_utils.arrow_schema_to_kinetica_columns"
-    )
+    @patch("kinetica_ray.type_utils.arrow_schema_to_kinetica_columns")
     def test_create_table(
         self, mock_arrow_to_kinetica, mock_init_client, mock_gpudb_sink_client
     ):
@@ -575,12 +562,8 @@ class TestKineticaDatasink:
             ds.on_write_start(schema)
 
     @patch.object(KineticaDatasink, "_init_client")
-    @patch(
-        "kinetica_ray.type_utils.arrow_schema_to_kinetica_columns"
-    )
-    @patch(
-        "kinetica_ray.type_utils.convert_arrow_batch_to_records"
-    )
+    @patch("kinetica_ray.type_utils.arrow_schema_to_kinetica_columns")
+    @patch("kinetica_ray.type_utils.convert_arrow_batch_to_records")
     def test_write(
         self,
         mock_convert_batch,
@@ -664,7 +647,6 @@ class TestKineticaTypeUtils:
     def test_arrow_schema_with_keys(self):
         """Test converting Arrow schema with primary/shard keys."""
         from gpudb import GPUdbColumnProperty
-
         from kinetica_ray.type_utils import (
             arrow_schema_to_kinetica_columns,
         )
@@ -724,7 +706,6 @@ class TestKineticaTypeUtils:
     def test_arrow_to_kinetica_integer_types(self):
         """Test Arrow integer types convert correctly to Kinetica."""
         from gpudb import GPUdbColumnProperty
-
         from kinetica_ray.type_utils import (
             arrow_to_kinetica_type,
         )
@@ -765,7 +746,6 @@ class TestKineticaTypeUtils:
     def test_arrow_to_kinetica_datetime_types(self):
         """Test Arrow date/time types convert correctly to Kinetica."""
         from gpudb import GPUdbColumnProperty
-
         from kinetica_ray.type_utils import (
             arrow_to_kinetica_type,
         )
@@ -794,7 +774,6 @@ class TestKineticaTypeUtils:
     def test_arrow_to_kinetica_other_types(self):
         """Test Arrow boolean, string, binary types convert correctly."""
         from gpudb import GPUdbColumnProperty
-
         from kinetica_ray.type_utils import (
             arrow_to_kinetica_type,
         )
@@ -809,7 +788,6 @@ class TestKineticaTypeUtils:
     def test_kinetica_to_arrow_case_insensitive(self):
         """Test Kinetica to Arrow conversion is case-insensitive."""
         from gpudb import GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             kinetica_to_arrow_type,
         )
@@ -888,7 +866,6 @@ class TestKineticaTypeUtils:
         from datetime import date, datetime, time
 
         from gpudb import GPUdbColumnProperty, GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             convert_arrow_batch_to_records,
         )
@@ -949,7 +926,6 @@ class TestKineticaTypeUtils:
         from datetime import date, datetime, time
 
         from gpudb import GPUdbColumnProperty, GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             convert_arrow_batch_to_records,
         )
@@ -1000,7 +976,6 @@ class TestKineticaTypeUtils:
         from datetime import date
 
         from gpudb import GPUdbColumnProperty, GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             convert_arrow_batch_to_records,
         )
@@ -1073,7 +1048,6 @@ class TestKineticaTypeUtils:
     def test_decimal_scale_zero_preserved(self):
         """Test that decimal scale=0 is preserved, not treated as falsy."""
         from gpudb import GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             kinetica_to_arrow_type,
         )
@@ -1101,7 +1075,6 @@ class TestKineticaTypeUtils:
     def test_decimal_scale_none_uses_default(self):
         """Test that decimal with scale=None uses the default scale."""
         from gpudb import GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             kinetica_to_arrow_type,
         )
@@ -1172,9 +1145,9 @@ class TestKineticaTypeUtils:
 
         assert kinetica_type == "string"
         # Should be array(double) without size
-        assert (
-            "array(double)" in props
-        ), f"Expected 'array(double)' in props, got {props}"
+        assert "array(double)" in props, (
+            f"Expected 'array(double)' in props, got {props}"
+        )
 
     def test_convert_arrow_batch_null_columns(self):
         """Test convert_arrow_batch_to_records handles None columns gracefully."""
@@ -1200,7 +1173,6 @@ class TestKineticaTypeUtils:
     def test_convert_arrow_batch_vector_invalid_values_error(self):
         """Test that vector serialization with invalid values raises ValueError."""
         from gpudb import GPUdbRecordColumn
-
         from kinetica_ray.type_utils import (
             convert_arrow_batch_to_records,
         )
@@ -1247,10 +1219,7 @@ class TestKineticaDatasourceValidation:
         KineticaDatasource must call super().__init__() to initialize
         _predicate_expr from _DatasourcePredicatePushdownMixin.
         """
-        with patch(
-            "kinetica_ray.datasource."
-            "KineticaDatasource._init_client"
-        ):
+        with patch("kinetica_ray.datasource.KineticaDatasource._init_client"):
             ds = KineticaDatasource(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -1272,10 +1241,7 @@ class TestKineticaDatasourceValidation:
 
     def test_valid_sort_orders_accepted(self):
         """Test that valid sort_order values are accepted."""
-        with patch(
-            "kinetica_ray.datasource."
-            "KineticaDatasource._init_client"
-        ):
+        with patch("kinetica_ray.datasource.KineticaDatasource._init_client"):
             # ascending should work
             ds1 = KineticaDatasource(
                 url="http://localhost:9191",
@@ -1307,10 +1273,7 @@ class TestKineticaDatasinkValidation:
         KineticaDatasink must call super().__init__() to ensure
         the Datasink base class initializes any required state.
         """
-        with patch(
-            "kinetica_ray.datasink."
-            "KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             sink = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -1335,10 +1298,7 @@ class TestKineticaDatasinkSerialization:
         """Test that decimal column precision/scale survives serialization."""
         from gpudb import GPUdbRecordColumn
 
-        with patch(
-            "kinetica_ray.datasink."
-            "KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -1366,10 +1326,7 @@ class TestKineticaDatasinkSerialization:
         """Test that non-decimal columns don't include precision/scale."""
         from gpudb import GPUdbRecordColumn
 
-        with patch(
-            "kinetica_ray.datasink."
-            "KineticaDatasink._init_client"
-        ):
+        with patch("kinetica_ray.datasink.KineticaDatasink._init_client"):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
@@ -1480,14 +1437,8 @@ class TestKineticaDatasinkTableCreation:
     @patch.object(KineticaDatasink, "_table_exists")
     @patch.object(KineticaDatasink, "_create_table")
     @patch.object(KineticaDatasink, "_create_gpudb_table")
-    @patch(
-        "kinetica_ray.type_utils."
-        "arrow_schema_to_kinetica_columns"
-    )
-    @patch(
-        "kinetica_ray.type_utils."
-        "convert_arrow_batch_to_records"
-    )
+    @patch("kinetica_ray.type_utils.arrow_schema_to_kinetica_columns")
+    @patch("kinetica_ray.type_utils.convert_arrow_batch_to_records")
     def test_on_write_start_creates_table(
         self,
         mock_convert,
@@ -1537,10 +1488,7 @@ class TestKineticaDatasinkTableCreation:
     @patch.object(KineticaDatasink, "_init_client")
     @patch.object(KineticaDatasink, "_table_exists")
     @patch.object(KineticaDatasink, "_create_table")
-    @patch(
-        "kinetica_ray.type_utils."
-        "arrow_schema_to_kinetica_columns"
-    )
+    @patch("kinetica_ray.type_utils.arrow_schema_to_kinetica_columns")
     def test_on_write_start_error_propagated(
         self,
         mock_arrow_to_kinetica,
@@ -1690,9 +1638,7 @@ class TestCreateGpudbClient:
 
     def test_datasource_uses_shared_factory(self):
         """Test that KineticaDatasource uses the shared factory."""
-        with patch(
-            "kinetica_ray.type_utils.create_gpudb_client"
-        ) as mock_factory:
+        with patch("kinetica_ray.type_utils.create_gpudb_client") as mock_factory:
             mock_factory.return_value = MagicMock()
 
             ds = KineticaDatasource(
@@ -1713,9 +1659,7 @@ class TestCreateGpudbClient:
 
     def test_datasink_uses_shared_factory(self):
         """Test that KineticaDatasink uses the shared factory."""
-        with patch(
-            "kinetica_ray.type_utils.create_gpudb_client"
-        ) as mock_factory:
+        with patch("kinetica_ray.type_utils.create_gpudb_client") as mock_factory:
             mock_factory.return_value = MagicMock()
 
             ds = KineticaDatasink(
@@ -1758,9 +1702,8 @@ class TestKineticaIntegration:
 
     def test_read_simple_query(self, connection_params):
         """Test reading data from a Kinetica table."""
-        import ray
-
         import kinetica_ray as kr
+        import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
@@ -1780,9 +1723,8 @@ class TestKineticaIntegration:
 
     def test_write_and_read_roundtrip(self, connection_params):
         """Test writing and reading back data."""
-        import ray
-
         import kinetica_ray as kr
+        import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
@@ -1831,9 +1773,8 @@ class TestKineticaIntegration:
 
     def test_read_with_filter(self, connection_params):
         """Test reading with a filter expression."""
-        import ray
-
         import kinetica_ray as kr
+        import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
@@ -1880,9 +1821,8 @@ class TestKineticaIntegration:
 
     def test_read_specific_columns(self, connection_params):
         """Test reading specific columns."""
-        import ray
-
         import kinetica_ray as kr
+        import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)

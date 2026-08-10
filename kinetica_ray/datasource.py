@@ -7,7 +7,8 @@ from Kinetica databases using the GPUdbTable class for idiomatic API usage.
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ray.data._internal.util import _check_import
 from ray.data.block import BlockMetadata
@@ -15,7 +16,6 @@ from ray.data.datasource.datasource import Datasource, ReadTask
 
 if TYPE_CHECKING:
     import pyarrow as pa
-
     from ray.data.context import DataContext
 
 
@@ -197,7 +197,7 @@ class KineticaDatasource(Datasource):
         table_name: str,
         username: Optional[str] = None,
         password: Optional[str] = None,
-        columns: Optional[List[str]] = None,
+        columns: Optional[list[str]] = None,
         filter_expression: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "ascending",
@@ -206,7 +206,7 @@ class KineticaDatasource(Datasource):
         use_multihead_io: bool = False,
         convert_special_types: bool = True,
         partition_column: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize the Kinetica datasource.
@@ -304,19 +304,18 @@ class KineticaDatasource(Datasource):
             )
 
         # Validate and set partition column for hash-based parallel reads
-        if partition_column is not None:
-            if not _is_valid_identifier(partition_column):
-                raise ValueError(
-                    f"Invalid partition_column '{partition_column}'. "
-                    "Column names must start with a letter or underscore and "
-                    "contain only letters, digits, and underscores."
-                )
+        if partition_column is not None and not _is_valid_identifier(partition_column):
+            raise ValueError(
+                f"Invalid partition_column '{partition_column}'. "
+                "Column names must start with a letter or underscore and "
+                "contain only letters, digits, and underscores."
+            )
         self._partition_column = partition_column
 
         # Table info is fetched lazily in get_read_tasks() to follow Ray's
         # datasource contract - side effects should not occur in __init__
         self._total_count: Optional[int] = None
-        self._arrow_schema: Optional["pa.Schema"] = None
+        self._arrow_schema: Optional[pa.Schema] = None
         self._avg_row_size: Optional[int] = None
         self._table_info_initialized: bool = False
 
@@ -698,7 +697,7 @@ class KineticaDatasource(Datasource):
         parallelism: int,
         per_task_row_limit: Optional[int] = None,
         data_context: Optional["DataContext"] = None,
-    ) -> List[ReadTask]:
+    ) -> list[ReadTask]:
         """
         Generate read tasks for parallel data loading.
 

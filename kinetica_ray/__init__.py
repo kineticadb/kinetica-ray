@@ -12,7 +12,10 @@ __email__ = "support@kinetica.com"
 from .datasink import KineticaDatasink, KineticaSinkMode, KineticaTableSettings
 from .datasource import KineticaDatasource
 from .io import read_kinetica, read_kinetica_sql, write_kinetica, write_kinetica_sql
-from .sql_connection import KineticaConnectionFactory, create_kinetica_connection_factory
+from .sql_connection import (
+    KineticaConnectionFactory,
+    create_kinetica_connection_factory,
+)
 
 __all__ = [
     "read_kinetica",

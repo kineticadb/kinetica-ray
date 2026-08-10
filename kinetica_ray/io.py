@@ -2,7 +2,7 @@
 I/O operations for Kinetica-Ray integration.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ray.data import Dataset, read_datasource, read_sql
 
@@ -17,7 +17,7 @@ def read_kinetica(
     *,
     username: Optional[str] = None,
     password: Optional[str] = None,
-    columns: Optional[List[str]] = None,
+    columns: Optional[list[str]] = None,
     filter_expression: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: str = "ascending",
@@ -26,11 +26,11 @@ def read_kinetica(
     use_multihead_io: bool = False,
     convert_special_types: bool = True,
     partition_column: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
     num_cpus: Optional[float] = None,
     num_gpus: Optional[float] = None,
     memory: Optional[float] = None,
-    ray_remote_args: Optional[Dict[str, Any]] = None,
+    ray_remote_args: Optional[dict[str, Any]] = None,
     concurrency: Optional[int] = None,
     override_num_blocks: Optional[int] = None,
 ) -> Dataset:
@@ -119,8 +119,8 @@ def read_kinetica_sql(
     password: Optional[str] = None,
     oauth_token: Optional[str] = None,
     default_schema: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    ray_remote_args: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
+    ray_remote_args: Optional[dict[str, Any]] = None,
     concurrency: Optional[int] = None,
     override_num_blocks: Optional[int] = None,
 ) -> Dataset:
@@ -169,7 +169,7 @@ def read_kinetica_sql(
         options=options,
     )
 
-    read_kwargs: Dict[str, Any] = {
+    read_kwargs: dict[str, Any] = {
         "sql": sql,
         "connection_factory": connection_factory,
     }
@@ -197,8 +197,8 @@ def write_kinetica(
     table_settings: Optional[KineticaTableSettings] = None,
     batch_size: int = 10000,
     use_multihead: bool = True,
-    options: Optional[Dict[str, Any]] = None,
-    ray_remote_args: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
+    ray_remote_args: Optional[dict[str, Any]] = None,
     concurrency: Optional[int] = None,
 ) -> None:
     """Write a :class:`~ray.data.Dataset` to a Kinetica database table.
@@ -271,8 +271,8 @@ def write_kinetica_sql(
     password: Optional[str] = None,
     oauth_token: Optional[str] = None,
     default_schema: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-    ray_remote_args: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
+    ray_remote_args: Optional[dict[str, Any]] = None,
     concurrency: Optional[int] = None,
 ) -> None:
     """Write a :class:`~ray.data.Dataset` to Kinetica using SQL INSERT.
@@ -320,7 +320,7 @@ def write_kinetica_sql(
         options=options,
     )
 
-    write_kwargs: Dict[str, Any] = {
+    write_kwargs: dict[str, Any] = {
         "sql": sql,
         "connection_factory": connection_factory,
     }

@@ -6,9 +6,8 @@ This example demonstrates how to:
 2. Read Kinetica data back into Ray.
 """
 
-import ray
-
 import kinetica_ray as kr
+import ray
 
 
 def main():

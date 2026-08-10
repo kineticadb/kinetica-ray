@@ -7,7 +7,7 @@ and Kinetica column definitions.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +32,18 @@ def _check_gpudb():
         import gpudb
 
         return gpudb
-    except ImportError:
+    except ImportError as e:
         raise ImportError(
             "gpudb is required for Kinetica integration. "
             "Install it with: pip install gpudb"
-        )
+        ) from e
 
 
 def create_gpudb_client(
     url: str,
     username: Optional[str] = None,
     password: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
+    options: Optional[dict[str, Any]] = None,
 ):
     """
     Create and return a GPUdb client instance.
@@ -82,7 +82,7 @@ def create_gpudb_client(
 
 
 def _column_type_to_array_inner(
-    column_type: Any, properties: Optional[List[str]] = None
+    column_type: Any, properties: Optional[list[str]] = None
 ) -> str:
     """
     Convert a GPUdbRecordColumn type constant to its array inner type string.
@@ -143,7 +143,7 @@ def _column_type_to_array_inner(
 def arrow_to_kinetica_type(
     arrow_type: "pa.DataType",
     column_name: str = "",
-) -> Tuple[str, List[str]]:
+) -> tuple[str, list[str]]:
     """
     Convert a PyArrow data type to Kinetica column type and properties.
 
@@ -203,9 +203,10 @@ def arrow_to_kinetica_type(
     # String types
     if pa.types.is_string(arrow_type) or pa.types.is_large_string(arrow_type):
         return GPUdbRecordColumn._ColumnType.STRING, []
-    if hasattr(pa.types, "is_utf8"):
-        if pa.types.is_utf8(arrow_type) or pa.types.is_large_utf8(arrow_type):
-            return GPUdbRecordColumn._ColumnType.STRING, []
+    if hasattr(pa.types, "is_utf8") and (
+        pa.types.is_utf8(arrow_type) or pa.types.is_large_utf8(arrow_type)
+    ):
+        return GPUdbRecordColumn._ColumnType.STRING, []
 
     # UUID (must come before generic fixed-size binary check)
     if pa.types.is_fixed_size_binary(arrow_type) and arrow_type.byte_width == 16:
@@ -420,9 +421,9 @@ def kinetica_to_arrow_type(column: Any) -> "pa.DataType":
 
 def arrow_schema_to_kinetica_columns(
     schema: "pa.Schema",
-    primary_keys: Optional[List[str]] = None,
-    shard_keys: Optional[List[str]] = None,
-) -> List:
+    primary_keys: Optional[list[str]] = None,
+    shard_keys: Optional[list[str]] = None,
+) -> list:
     """
     Convert a PyArrow schema to a list of Kinetica column definitions.
 
@@ -551,8 +552,8 @@ def _is_uuid_column(col_def: Any) -> bool:
 
 def convert_arrow_batch_to_records(
     batch: "pa.RecordBatch",
-    columns: List,
-) -> List[Dict[str, Any]]:
+    columns: list,
+) -> list[dict[str, Any]]:
     """
     Convert a PyArrow RecordBatch to a list of dictionaries for Kinetica insertion.
 
@@ -610,9 +611,9 @@ def convert_arrow_batch_to_records(
             else:
                 # Check for date/time types
                 dt_type = _is_date_time_column(col_def)
-                col_types[
-                    col_name
-                ] = dt_type  # Could be 'date', 'time', 'datetime', 'timestamp', or None
+                col_types[col_name] = (
+                    dt_type  # Could be 'date', 'time', 'datetime', 'timestamp', or None
+                )
         else:
             col_types[col_name] = None
 
@@ -721,9 +722,7 @@ def convert_arrow_batch_to_records(
                 if isinstance(value, datetime):
                     # Use space separator for Kinetica compatibility
                     record[col_name] = value.strftime("%Y-%m-%d %H:%M:%S.%f")
-                elif isinstance(value, date):
-                    record[col_name] = value.isoformat()
-                elif isinstance(value, time):
+                elif isinstance(value, (date, time)):
                     record[col_name] = value.isoformat()
                 else:
                     record[col_name] = value
@@ -734,7 +733,7 @@ def convert_arrow_batch_to_records(
 
 
 def convert_records_to_arrow_table(
-    records: List[Dict[str, Any]],
+    records: list[dict[str, Any]],
     schema: "pa.Schema",
 ) -> "pa.Table":
     """
