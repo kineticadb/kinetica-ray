@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
+from gpudb import GPUdb
 from kinetica_ray.datasink import (
     KineticaDatasink,
     KineticaSinkMode,
@@ -29,43 +30,74 @@ from ray.data._internal.execution.interfaces.task_context import TaskContext
 
 @pytest.fixture
 def mock_gpudb_client():
-    """Mock GPUdb client for datasource tests."""
-    client = MagicMock()
+    """Mock GPUdb client for datasource tests.
 
-    # Mock show_table response
+    KineticaDatasource wraps a real GPUdbTable to read table type info and
+    row samples. GPUdbTable's real constructor expects a fully-functional,
+    server-shaped response protocol (AttrDict-style responses, not plain
+    dicts) that a bare client mock can't satisfy. So gpudb.GPUdbTable is
+    patched here to return a fake table exposing a real GPUdbRecordType and
+    canned records -- isolating these tests to KineticaDatasource's own
+    logic rather than gpudb's internal wire protocol. The fake table is
+    exposed as client.gpudb_table for tests that need to assert on it.
+    """
+    from gpudb import GPUdbRecordColumn, GPUdbRecordType
+
+    client = MagicMock(spec=GPUdb)
+
+    # Mock show_table response, used directly by _get_table_info() for the
+    # unfiltered row count.
     client.show_table.return_value = {
-        "type_schemas": [
-            json.dumps(
-                {
-                    "fields": [
-                        {"name": "id", "type": "long"},
-                        {"name": "name", "type": "string"},
-                        {"name": "value", "type": "double"},
-                    ]
-                }
-            )
-        ],
-        "properties": [{"id": [], "name": [], "value": []}],
         "sizes": [100],
         "total_size": 100,
     }
 
-    # Mock get_records response
+    # Mock get_records response, used directly by _get_table_info() for the
+    # filtered row count.
     client.get_records.return_value = {
-        "records_json": [
-            json.dumps({"id": 1, "name": "Alice", "value": 100.5}),
-            json.dumps({"id": 2, "name": "Bob", "value": 200.75}),
-        ],
         "total_number_of_records": 100,
     }
 
-    return client
+    record_type = GPUdbRecordType(
+        columns=[
+            GPUdbRecordColumn(
+                name="id",
+                column_type=GPUdbRecordColumn._ColumnType.LONG,
+                column_properties=[],
+            ),
+            GPUdbRecordColumn(
+                name="name",
+                column_type=GPUdbRecordColumn._ColumnType.STRING,
+                column_properties=[],
+            ),
+            GPUdbRecordColumn(
+                name="value",
+                column_type=GPUdbRecordColumn._ColumnType.DOUBLE,
+                column_properties=[],
+            ),
+        ],
+        label="test_table",
+    )
+    sample_records = [
+        {"id": 1, "name": "Alice", "value": 100.5},
+        {"id": 2, "name": "Bob", "value": 200.75},
+    ]
+
+    fake_table = MagicMock()
+    fake_table.gpudbrecord_type = record_type
+    fake_table.get_records.return_value = sample_records
+    fake_table.get_records_by_column.return_value = sample_records
+    client.gpudb_table = fake_table
+
+    with patch("gpudb.GPUdbTable", return_value=fake_table):
+        yield client
 
 
 @pytest.fixture
 def mock_gpudb_sink_client():
     """Mock GPUdb client for datasink tests."""
-    client = MagicMock()
+    # spec=GPUdb so isinstance(client, GPUdb) passes inside GPUdbTable.__init__.
+    client = MagicMock(spec=GPUdb)
 
     # Mock table existence check
     client.has_table.return_value = {"table_exists": False}
@@ -264,7 +296,9 @@ class TestKineticaDatasource:
         row_size = ds._estimate_row_size(mock_gpudb_client, sample_size=100)
 
         assert row_size > 0
-        mock_gpudb_client.get_records.assert_called()
+        # ds has columns=["id", "name"] set, so the table wrapper's
+        # column-selecting variant is the one actually used.
+        mock_gpudb_client.gpudb_table.get_records_by_column.assert_called()
 
     @patch.object(KineticaDatasource, "_init_client")
     @pytest.mark.parametrize("parallelism", [1, 2, 4])
@@ -571,6 +605,8 @@ class TestKineticaDatasink:
         mock_gpudb_sink_client,
     ):
         """Test write method."""
+        from gpudb import GPUdbRecordColumn
+
         mock_init_client.return_value = mock_gpudb_sink_client
         mock_gpudb_sink_client.has_table.return_value = {"table_exists": False}
 
@@ -595,21 +631,47 @@ class TestKineticaDatasink:
         )
         block_data = pa.Table.from_batches([rb])
 
-        with patch.object(KineticaDatasink, "_create_table"):
+        # write() wraps a real GPUdbTable for multihead ingestion. GPUdbTable's
+        # real constructor expects a fully-functional, server-shaped response
+        # protocol that a bare client mock can't satisfy, so it's patched here
+        # -- isolating this test to KineticaDatasink's own write() logic.
+        fake_gpudb_table = MagicMock()
+        fake_gpudb_table.insert_records.return_value = {"info": {}}
+        fake_gpudb_table.total_inserted = 2
+        fake_gpudb_table.total_updated = 0
+
+        with (
+            patch.object(KineticaDatasink, "_create_table"),
+            patch("gpudb.GPUdbTable", return_value=fake_gpudb_table),
+        ):
             ds = KineticaDatasink(
                 url="http://localhost:9191",
                 table_name="test_table",
                 mode=KineticaSinkMode.CREATE,
                 schema=schema,
             )
-            ds._column_defs = []
+            # A real (non-empty) column list: GPUdbTable rejects an empty one.
+            ds._column_defs = [
+                {
+                    "name": "id",
+                    "column_type": GPUdbRecordColumn._ColumnType.LONG,
+                    "column_properties": [],
+                    "is_nullable": True,
+                },
+                {
+                    "name": "name",
+                    "column_type": GPUdbRecordColumn._ColumnType.STRING,
+                    "column_properties": [],
+                    "is_nullable": True,
+                },
+            ]
 
             ctx = TaskContext(task_idx=0, op_name="test_write")
             result = ds.write([block_data], ctx=ctx)
 
-            assert "num_inserted" in result
-            assert "num_updated" in result
-            # Note: write raises RuntimeError on errors instead of returning them
+            assert result["num_inserted"] == 2
+            assert result["num_updated"] == 0
+            fake_gpudb_table.flush_data_to_server.assert_called_once()
 
 
 # ============================================================================
@@ -1051,13 +1113,13 @@ class TestKineticaTypeUtils:
             kinetica_to_arrow_type,
         )
 
-        # Create a decimal column with explicit scale=0
+        # Create a decimal column with explicit scale=0. GPUdbRecordColumn
+        # has no precision=/scale= constructor kwargs -- it derives them by
+        # parsing "decimal(p,s)" out of column_properties.
         col = GPUdbRecordColumn(
             name="amount",
             column_type=GPUdbRecordColumn._ColumnType.STRING,
-            column_properties=["decimal"],
-            precision=10,
-            scale=0,  # Integer decimal (no decimal places)
+            column_properties=["decimal(10,0)"],  # Integer decimal (no decimal places)
         )
 
         arrow_type = kinetica_to_arrow_type(col)
@@ -1072,17 +1134,27 @@ class TestKineticaTypeUtils:
         assert arrow_type.precision == 10
 
     def test_decimal_scale_none_uses_default(self):
-        """Test that decimal with scale=None uses the default scale."""
+        """Test that decimal with scale=None uses the default scale.
+
+        The real GPUdbRecordColumn always eagerly resolves .precision/.scale
+        to concrete defaults once is_decimal is True -- it never actually
+        leaves them None, so kinetica_to_arrow_type's own defensive
+        `is not None` handling for that case can't be exercised through the
+        real class. Test it directly with a minimal object exposing the
+        same attributes kinetica_to_arrow_type's decimal branch reads.
+        """
+        from types import SimpleNamespace
+
         from gpudb import GPUdbRecordColumn
         from kinetica_ray.type_utils import (
             kinetica_to_arrow_type,
         )
 
-        # Create a decimal column without explicit scale
-        col = GPUdbRecordColumn(
+        col = SimpleNamespace(
             name="amount",
             column_type=GPUdbRecordColumn._ColumnType.STRING,
             column_properties=["decimal"],
+            is_decimal=True,
             precision=18,
             scale=None,  # Should use default
         )
@@ -1303,14 +1375,14 @@ class TestKineticaDatasinkSerialization:
                 table_name="test_table",
             )
 
-            # Create a decimal column with specific precision and scale
+            # Create a decimal column with specific precision and scale.
+            # GPUdbRecordColumn has no precision=/scale= constructor kwargs --
+            # it derives them by parsing "decimal(p,s)" out of column_properties.
             decimal_col = GPUdbRecordColumn(
                 name="amount",
                 column_type=GPUdbRecordColumn._ColumnType.STRING,
-                column_properties=["decimal"],
+                column_properties=["decimal(10,2)"],
                 is_nullable=False,
-                precision=10,
-                scale=2,
             )
 
             # Serialize and deserialize
