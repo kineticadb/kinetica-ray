@@ -6,7 +6,6 @@ work correctly without requiring a running Kinetica server.
 """
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -1684,21 +1683,18 @@ class TestCreateGpudbClient:
 # ============================================================================
 
 
-@pytest.mark.skipif(
-    not os.environ.get("KINETICA_URL"),
-    reason="Integration tests require KINETICA_URL environment variable",
-)
 class TestKineticaIntegration:
-    """Integration tests requiring a running Kinetica server."""
+    """Integration tests requiring a running Kinetica server.
+
+    Point these at a real server with --kinetica-url (and optionally
+    --kinetica-username / --kinetica-password), or the KINETICA_URL /
+    KINETICA_USER / KINETICA_PASS environment variables. Tests skip at
+    runtime if no URL is available either way.
+    """
 
     @pytest.fixture
-    def connection_params(self):
-        """Get connection parameters from environment."""
-        return {
-            "url": os.environ.get("KINETICA_URL", "http://localhost:9191"),
-            "username": os.environ.get("KINETICA_USER", "admin"),
-            "password": os.environ.get("KINETICA_PASS", ""),
-        }
+    def connection_params(self, kinetica_connection_params):
+        return kinetica_connection_params
 
     def test_read_simple_query(self, connection_params):
         """Test reading data from a Kinetica table."""
@@ -1869,6 +1865,232 @@ class TestKineticaIntegration:
                     password=connection_params.get("password"),
                 )
                 client.clear_table(table_name=table_name)
+            except Exception:
+                pass
+
+
+# ============================================================================
+# Full Implementation Integration Test (requires Kinetica server)
+# ============================================================================
+
+
+class TestKineticaFullImplementation:
+    """One end-to-end integration test exercising the full kinetica_ray
+    public API against a real Kinetica server: write_kinetica (overwrite,
+    with table_settings/primary_keys/shard_keys), write_kinetica_sql
+    (append via SQL INSERT), read_kinetica (columns, filter_expression,
+    sort_by, and hash-partitioned parallel reads via partition_column),
+    and read_kinetica_sql (an aggregate query) -- across every Kinetica
+    column type kinetica_ray's type_utils supports.
+    """
+
+    NUM_ROWS = 40
+
+    @pytest.fixture
+    def connection_params(self, kinetica_connection_params):
+        return kinetica_connection_params
+
+    @staticmethod
+    def _build_source_table():
+        """Build a pyarrow table covering every Kinetica-supported type."""
+        import datetime as dt
+        from decimal import Decimal
+
+        n = TestKineticaFullImplementation.NUM_ROWS
+
+        columns = {
+            "id": [i for i in range(n)],
+            "region": [f"region_{i % 4}" for i in range(n)],
+            "is_active": [i % 2 == 0 for i in range(n)],
+            "small_num": [i - 20 for i in range(n)],  # fits int8
+            "medium_num": [i * 10 for i in range(n)],  # fits int16
+            "count32": [i * 1000 for i in range(n)],
+            "big_count": [i * 10_000_000_000 for i in range(n)],
+            "ratio32": [i * 0.5 for i in range(n)],
+            "ratio64": [i * 0.25 for i in range(n)],
+            "price": [Decimal(f"{i}.{i % 100:02d}") for i in range(n)],
+            "label": [f"label_{i}" for i in range(n)],
+            "event_date": [
+                dt.date(2024, 1, 1) + dt.timedelta(days=i) for i in range(n)
+            ],
+            "event_time": [
+                dt.time(hour=i % 24, minute=(i * 3) % 60, second=(i * 7) % 60)
+                for i in range(n)
+            ],
+            "event_datetime": [
+                dt.datetime(2024, 1, 1) + dt.timedelta(hours=i) for i in range(n)
+            ],
+            "tags": [[f"tag{i}", f"tag{i + 1}"] for i in range(n)],
+            "embedding": [
+                [float(i), float(i + 1), float(i + 2), float(i + 3)] for i in range(n)
+            ],
+            "attributes": [{"k1": f"v{i}", "k2": i} for i in range(n)],
+        }
+
+        schema = pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("region", pa.string()),
+                pa.field("is_active", pa.bool_()),
+                pa.field("small_num", pa.int8()),
+                pa.field("medium_num", pa.int16()),
+                pa.field("count32", pa.int32()),
+                pa.field("big_count", pa.int64()),
+                pa.field("ratio32", pa.float32()),
+                pa.field("ratio64", pa.float64()),
+                pa.field("price", pa.decimal128(10, 2)),
+                pa.field("label", pa.string()),
+                pa.field("event_date", pa.date32()),
+                pa.field("event_time", pa.time64("us")),
+                pa.field("event_datetime", pa.timestamp("us")),
+                pa.field("tags", pa.list_(pa.string())),
+                pa.field("embedding", pa.list_(pa.float32(), 4)),
+                pa.field(
+                    "attributes",
+                    pa.struct([("k1", pa.string()), ("k2", pa.int64())]),
+                ),
+            ]
+        )
+
+        arrays = [pa.array(columns[field.name], type=field.type) for field in schema]
+        return pa.Table.from_arrays(arrays, schema=schema)
+
+    def test_full_implementation(self, connection_params):
+        """Round-trips a rich schema through every public read/write path."""
+        import uuid
+
+        import kinetica_ray as kr
+        import ray
+
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True)
+
+        table_name = f"kinetica_ray_full_integration_{uuid.uuid4().hex[:8]}"
+        n = self.NUM_ROWS
+
+        try:
+            # --- write_kinetica: create the table via overwrite, with
+            # primary/shard keys, then verify a plain read round-trips
+            # every column type correctly. ---
+            source_table = self._build_source_table()
+            ds = ray.data.from_arrow(source_table)
+
+            kr.write_kinetica(
+                ds,
+                table_name=table_name,
+                mode="overwrite",
+                table_settings=kr.KineticaTableSettings(
+                    primary_keys=["id"],
+                    shard_keys=["region"],
+                ),
+                batch_size=10,
+                use_multihead=True,
+                **connection_params,
+            )
+
+            read_ds = kr.read_kinetica(
+                table_name=table_name,
+                sort_by="id",
+                **connection_params,
+            )
+            rows = sorted(read_ds.take_all(), key=lambda r: r["id"])
+            assert len(rows) == n
+
+            for i, row in enumerate(rows):
+                assert row["id"] == i
+                assert row["region"] == f"region_{i % 4}"
+                assert row["is_active"] == (i % 2 == 0)
+                assert row["small_num"] == i - 20
+                assert row["medium_num"] == i * 10
+                assert row["count32"] == i * 1000
+                assert row["big_count"] == i * 10_000_000_000
+                assert row["ratio32"] == pytest.approx(i * 0.5)
+                assert row["ratio64"] == pytest.approx(i * 0.25)
+                assert float(row["price"]) == pytest.approx(i + (i % 100) / 100)
+                assert row["label"] == f"label_{i}"
+                assert row["tags"] == [f"tag{i}", f"tag{i + 1}"]
+                assert list(row["embedding"]) == pytest.approx(
+                    [float(i), float(i + 1), float(i + 2), float(i + 3)]
+                )
+                # struct columns round-trip through Kinetica as JSON text.
+                attributes = json.loads(row["attributes"])
+                assert attributes == {"k1": f"v{i}", "k2": i}
+
+            # --- read_kinetica: columns + filter_expression + sort_by. ---
+            filtered_ds = kr.read_kinetica(
+                table_name=table_name,
+                columns=["id", "count32"],
+                filter_expression="count32 >= 20000",
+                sort_by="id",
+                **connection_params,
+            )
+            filtered_rows = filtered_ds.take_all()
+            assert len(filtered_rows) == n - 20  # ids 20..39 have count32 >= 20000
+            assert all("region" not in row for row in filtered_rows)
+            assert all(row["count32"] >= 20000 for row in filtered_rows)
+
+            # --- read_kinetica: hash-partitioned parallel reads. ---
+            partitioned_ds = kr.read_kinetica(
+                table_name=table_name,
+                partition_column="id",
+                override_num_blocks=4,
+                **connection_params,
+            )
+            partitioned_ids = sorted(row["id"] for row in partitioned_ds.take_all())
+            assert partitioned_ids == list(range(n))  # no dupes, none missing
+
+            # --- write_kinetica_sql: append rows to the existing table. ---
+            extra_rows = [
+                {
+                    "id": n,
+                    "region": "region_extra",
+                    "count32": 99000,
+                },
+                {
+                    "id": n + 1,
+                    "region": "region_extra",
+                    "count32": 99000,
+                },
+            ]
+            extra_ds = ray.data.from_items(extra_rows)
+            kr.write_kinetica_sql(
+                extra_ds,
+                sql=f"INSERT INTO {table_name} (id, region, count32) VALUES (?, ?, ?)",
+                **connection_params,
+            )
+
+            # --- read_kinetica_sql: an aggregate query over everything. ---
+            agg_ds = kr.read_kinetica_sql(
+                sql=f"SELECT region, COUNT(*) AS cnt, SUM(count32) AS total "
+                f"FROM {table_name} GROUP BY region ORDER BY region",
+                **connection_params,
+            )
+            # Normalize key case: SQL drivers vary in whether unquoted
+            # identifiers/aliases come back lowercased, uppercased, or as
+            # written -- the data values themselves are left untouched.
+            agg_rows = {
+                {k.lower(): v for k, v in row.items()}["region"]: {
+                    k.lower(): v for k, v in row.items()
+                }
+                for row in agg_ds.take_all()
+            }
+            assert agg_rows["region_extra"]["cnt"] == 2
+            assert agg_rows["region_extra"]["total"] == 99000 * 2
+            assert sum(row["cnt"] for row in agg_rows.values()) == n + 2
+
+        finally:
+            try:
+                from gpudb import GPUdb
+
+                client = GPUdb(
+                    host=connection_params["url"],
+                    username=connection_params.get("username"),
+                    password=connection_params.get("password"),
+                )
+                client.clear_table(
+                    table_name=table_name,
+                    options={"no_error_if_not_exists": "true"},
+                )
             except Exception:
                 pass
 

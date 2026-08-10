@@ -50,3 +50,20 @@ For SQL-based access (arbitrary queries, JOINs, existing-table INSERTs), use
 pip install -e ".[dev]"
 pytest tests/
 ```
+
+Most tests run against mocks and need no live server. A handful of
+integration tests (including one comprehensive end-to-end test covering
+every read/write path and column type) require a real Kinetica server and
+are skipped unless you point them at one, either via CLI options:
+
+```bash
+pytest tests/ --kinetica-url=http://localhost:9191 \
+    --kinetica-username=admin --kinetica-password=secret
+```
+
+or environment variables:
+
+```bash
+KINETICA_URL=http://localhost:9191 KINETICA_USER=admin KINETICA_PASS=secret \
+    pytest tests/
+```
