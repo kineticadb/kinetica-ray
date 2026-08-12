@@ -458,6 +458,14 @@ def arrow_schema_to_kinetica_columns(
             f"{sorted(invalid_cols)}. Available columns: {sorted(schema_columns)}"
         )
 
+    # Kinetica requires shard key columns to be a subset of the primary key
+    # whenever a primary key is defined.
+    if primary_keys and not shard_keys <= primary_keys:
+        raise ValueError(
+            f"Shard keys {sorted(shard_keys - primary_keys)} must be a subset "
+            f"of the primary key {sorted(primary_keys)} when both are specified."
+        )
+
     columns = []
 
     for field in schema:
@@ -468,7 +476,11 @@ def arrow_schema_to_kinetica_columns(
         if field.name in shard_keys:
             properties.append(GPUdbColumnProperty.SHARD_KEY)
 
-        is_nullable = field.nullable
+        # Kinetica requires primary key columns to be non-nullable, but
+        # Arrow schemas default fields to nullable=True regardless of
+        # whether they're a designated key -- so this can't just pass
+        # field.nullable through unchanged for primary key columns.
+        is_nullable = field.nullable and field.name not in primary_keys
 
         column = GPUdbRecordColumn(
             name=field.name,
@@ -732,6 +744,18 @@ def convert_arrow_batch_to_records(
     return records
 
 
+def _parse_vector_string(value: Any) -> Optional[list]:
+    """Parse Kinetica's VECTOR wire format: a comma-separated ASCII string
+    of floats (e.g. b"0.0,1.0,2.0,3.0"), returned as bytes or str."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("ascii")
+    if isinstance(value, str):
+        return [float(x) for x in value.split(",")]
+    return value
+
+
 def convert_records_to_arrow_table(
     records: list[dict[str, Any]],
     schema: "pa.Schema",
@@ -746,6 +770,8 @@ def convert_records_to_arrow_table(
     Returns:
         A PyArrow Table.
     """
+    import json
+
     _check_pyarrow()
 
     if not records:
@@ -760,18 +786,51 @@ def convert_records_to_arrow_table(
             value = record.get(field.name)
             columns[field.name].append(value)
 
+    cast_errors = (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError)
+
     arrays = []
     for field in schema:
         col_data = columns[field.name]
+
+        # Kinetica returns TIME columns as "HH:MM:SS[.ffffff]" strings, and
+        # PyArrow has no cast kernel from string to time32/time64 (unlike
+        # date32/timestamp, which do support a string cast) -- parse
+        # explicitly instead of relying on the generic cast fallback below.
+        if pa.types.is_time(field.type) and any(isinstance(v, str) for v in col_data):
+            from datetime import time as _time
+
+            col_data = [
+                _time.fromisoformat(v) if isinstance(v, str) else v for v in col_data
+            ]
+
+        # Kinetica returns VECTOR columns as a comma-separated ASCII string
+        # of floats (e.g. b"0.0,1.0,2.0,3.0"), not packed binary -- PyArrow
+        # has no cast kernel for turning that into a fixed_size_list either.
+        if pa.types.is_fixed_size_list(field.type) and any(
+            isinstance(v, (bytes, str)) for v in col_data
+        ):
+            col_data = [_parse_vector_string(v) for v in col_data]
+
+        # Kinetica returns JSON columns as already-decoded dict/list objects
+        # (not raw JSON text) when convert_special_types_on_retrieval is
+        # enabled, but the Arrow schema represents JSON columns as plain
+        # strings -- serialize back to JSON text to match.
+        if pa.types.is_string(field.type) and any(
+            isinstance(v, (dict, list)) for v in col_data
+        ):
+            col_data = [
+                json.dumps(v) if isinstance(v, (dict, list)) else v for v in col_data
+            ]
+
         try:
             array = pa.array(col_data, type=field.type)
-        except (pa.ArrowInvalid, pa.ArrowTypeError) as initial_error:
+        except cast_errors as initial_error:
             # Try creating array without explicit type, then cast
             try:
                 array = pa.array(col_data)
                 if array.type != field.type:
                     array = array.cast(field.type)
-            except (pa.ArrowInvalid, pa.ArrowTypeError) as cast_error:
+            except cast_errors as cast_error:
                 raise pa.ArrowTypeError(
                     f"Failed to convert column '{field.name}' to type {field.type}. "
                     f"Initial error: {initial_error}. Cast error: {cast_error}"

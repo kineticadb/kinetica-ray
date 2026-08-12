@@ -522,6 +522,27 @@ class KineticaDatasink(Datasink):
         """
         from gpudb import GPUdbException, GPUdbTable, GPUdbTableOptions
 
+        if table_exists:
+            # Let GPUdbTable discover the table's already-registered type
+            # from the server rather than reconstructing one locally: a
+            # GPUdbRecordType rebuilt from a stored schema_string can compute
+            # a different type_id than the one the server has on file even
+            # for an identical schema, which GPUdbTable's existing-table
+            # check then rejects as "type does not match". Table creation
+            # options have no effect on an existing table anyway.
+            return GPUdbTable(
+                _type=None,
+                name=self._table_name,
+                db=client,
+                use_multihead_io=self._use_multihead,
+                multihead_ingest_batch_size=self._batch_size,
+                # Buffer records instead of flushing per insertion.
+                # This allows the error check to prevent committing partial
+                # data when errors occur. flush_data_to_server() is called
+                # explicitly after confirming no errors.
+                flush_multi_head_ingest_per_insertion=False,
+            )
+
         record_type = self._get_record_type()
 
         if record_type is None:
@@ -529,25 +550,21 @@ class KineticaDatasink(Datasink):
                 "Cannot create GPUdbTable: no schema information available"
             )
 
-        # Only set table creation options when the table doesn't exist.
-        # These options have no effect on existing tables and could cause
-        # issues with some GPUdb SDK versions.
         table_options = GPUdbTableOptions()
-        if not table_exists:
-            if self._table_settings.is_replicated:
-                table_options.is_replicated = True
+        if self._table_settings.is_replicated:
+            table_options.is_replicated = True
 
-            if self._table_settings.chunk_size is not None:
-                table_options.chunk_size = self._table_settings.chunk_size
+        if self._table_settings.chunk_size is not None:
+            table_options.chunk_size = self._table_settings.chunk_size
 
-            if self._table_settings.ttl >= 0:
-                table_options.ttl = self._table_settings.ttl
+        if self._table_settings.ttl >= 0:
+            table_options.ttl = self._table_settings.ttl
 
-            if not self._table_settings.persist:
-                table_options.no_persist = True
+        if not self._table_settings.persist:
+            table_options.no_persist = True
 
-            if self._table_settings.collection_name:
-                table_options.collection_name = self._table_settings.collection_name
+        if self._table_settings.collection_name:
+            table_options.collection_name = self._table_settings.collection_name
 
         gpudb_table = GPUdbTable(
             _type=record_type,
@@ -556,10 +573,6 @@ class KineticaDatasink(Datasink):
             options=table_options,
             use_multihead_io=self._use_multihead,
             multihead_ingest_batch_size=self._batch_size,
-            # Buffer records instead of flushing per insertion.
-            # This allows the error check to prevent committing partial data
-            # when errors occur. flush_data_to_server() is called explicitly
-            # after confirming no errors.
             flush_multi_head_ingest_per_insertion=False,
         )
 
@@ -691,8 +704,8 @@ class KineticaDatasink(Datasink):
 
             # Get total counts from GPUdbTable after all records are flushed.
             # These represent all records written through this table instance.
-            total_inserted = gpudb_table.total_inserted
-            total_updated = gpudb_table.total_updated
+            total_inserted = gpudb_table.total_insert_records_count
+            total_updated = gpudb_table.total_update_records_count
 
         return {
             "num_inserted": total_inserted,

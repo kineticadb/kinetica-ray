@@ -128,9 +128,23 @@ def mock_gpudb_sink_client():
     return client
 
 
+# Test classes that talk to a real Kinetica server -- patch_gpudb must not
+# apply to these, or _init_client() silently gets a MagicMock instead of a
+# real connection.
+_LIVE_SERVER_TEST_CLASSES = {
+    "TestKineticaIntegration",
+    "TestKineticaFullImplementation",
+}
+
+
 @pytest.fixture(autouse=True)
-def patch_gpudb():
-    """Automatically patch GPUdb for all tests."""
+def patch_gpudb(request):
+    """Automatically patch GPUdb for all tests, except the ones that need a
+    real connection to a live Kinetica server."""
+    if request.cls is not None and request.cls.__name__ in _LIVE_SERVER_TEST_CLASSES:
+        yield None
+        return
+
     with patch("gpudb.GPUdb") as mock_gpudb_class:
         mock_instance = MagicMock()
         mock_gpudb_class.return_value = mock_instance
@@ -637,8 +651,8 @@ class TestKineticaDatasink:
         # -- isolating this test to KineticaDatasink's own write() logic.
         fake_gpudb_table = MagicMock()
         fake_gpudb_table.insert_records.return_value = {"info": {}}
-        fake_gpudb_table.total_inserted = 2
-        fake_gpudb_table.total_updated = 0
+        fake_gpudb_table.total_insert_records_count = 2
+        fake_gpudb_table.total_update_records_count = 0
 
         with (
             patch.object(KineticaDatasink, "_create_table"),
@@ -722,7 +736,8 @@ class TestKineticaTypeUtils:
 
         columns = arrow_schema_to_kinetica_columns(
             schema,
-            primary_keys=["id"],
+            # Kinetica requires shard keys to be a subset of the primary key.
+            primary_keys=["id", "region"],
             shard_keys=["region"],
         )
 
@@ -763,6 +778,34 @@ class TestKineticaTypeUtils:
                 primary_keys=["bad_pk"],
                 shard_keys=["bad_sk"],
             )
+
+    def test_shard_key_not_subset_of_primary_key_rejected(self):
+        """Kinetica requires shard keys to be a subset of the primary key."""
+        from kinetica_ray.type_utils import (
+            arrow_schema_to_kinetica_columns,
+        )
+
+        schema = pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("region", pa.string()),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="must be a subset"):
+            arrow_schema_to_kinetica_columns(
+                schema,
+                primary_keys=["id"],
+                shard_keys=["region"],
+            )
+
+        # A composite primary key that includes the shard key is fine.
+        columns = arrow_schema_to_kinetica_columns(
+            schema,
+            primary_keys=["id", "region"],
+            shard_keys=["region"],
+        )
+        assert len(columns) == 2
 
     def test_arrow_to_kinetica_integer_types(self):
         """Test Arrow integer types convert correctly to Kinetica."""
@@ -1079,6 +1122,73 @@ class TestKineticaTypeUtils:
 
         error_msg = str(exc_info.value)
         assert "int_col" in error_msg
+
+    def test_convert_records_to_arrow_time_column(self):
+        """Test that Kinetica's "HH:MM:SS[.ffffff]" TIME strings convert to
+        time64, which PyArrow has no direct string cast kernel for."""
+        from datetime import time
+
+        from kinetica_ray.type_utils import (
+            convert_records_to_arrow_table,
+        )
+
+        schema = pa.schema([pa.field("event_time", pa.time64("us"))])
+        records = [
+            {"event_time": "00:00:00.000"},
+            {"event_time": "23:59:59.000"},
+        ]
+
+        table = convert_records_to_arrow_table(records, schema)
+
+        assert table.column("event_time").to_pylist() == [
+            time(0, 0, 0),
+            time(23, 59, 59),
+        ]
+
+    def test_convert_records_to_arrow_vector_column(self):
+        """Test that Kinetica's VECTOR wire format (a comma-separated ASCII
+        string of floats, e.g. b"0.0,1.0,2.0,3.0") converts to a
+        fixed_size_list, which PyArrow has no direct cast kernel for."""
+        from kinetica_ray.type_utils import (
+            convert_records_to_arrow_table,
+        )
+
+        schema = pa.schema([pa.field("embedding", pa.list_(pa.float32(), 4))])
+        records = [
+            {"embedding": b"0.0,1.0,2.0,3.0"},
+            {"embedding": "2.0,3.0,4.0,5.0"},  # str, not just bytes
+        ]
+
+        table = convert_records_to_arrow_table(records, schema)
+
+        assert table.column("embedding").to_pylist() == [
+            [0.0, 1.0, 2.0, 3.0],
+            [2.0, 3.0, 4.0, 5.0],
+        ]
+
+    def test_convert_records_to_arrow_json_column(self):
+        """Test that Kinetica's already-decoded dict/list JSON values (from
+        convert_special_types_on_retrieval) serialize back to JSON text to
+        match the string type kinetica_type_to_arrow_schema uses for JSON
+        columns, which PyArrow has no direct cast kernel for."""
+        import json
+
+        from kinetica_ray.type_utils import (
+            convert_records_to_arrow_table,
+        )
+
+        schema = pa.schema([pa.field("attributes", pa.string())])
+        records = [
+            {"attributes": {"k1": "v0", "k2": 0}},
+            {"attributes": ["a", "b"]},
+        ]
+
+        table = convert_records_to_arrow_table(records, schema)
+
+        assert [json.loads(v) for v in table.column("attributes").to_pylist()] == [
+            {"k1": "v0", "k2": 0},
+            ["a", "b"],
+        ]
 
     def test_vector_bytes_json_serialization(self):
         """Test that vector (bytes) can be JSON serialized via base64."""
@@ -1770,24 +1880,48 @@ class TestKineticaIntegration:
 
     def test_read_simple_query(self, connection_params):
         """Test reading data from a Kinetica table."""
+        import uuid
+
         import kinetica_ray as kr
         import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
 
+        table_name = f"test_ray_simple_read_{uuid.uuid4().hex[:8]}"
+
         try:
-            ds = kr.read_kinetica(
-                table_name="ki_home.ki_catalog_ddl",  # System table that should exist
+            ds = ray.data.from_items([{"id": i} for i in range(5)])
+            kr.write_kinetica(
+                ds,
+                table_name=table_name,
+                mode="overwrite",
+                **connection_params,
+            )
+
+            read_ds = kr.read_kinetica(
+                table_name=table_name,
                 **connection_params,
                 limit=10,
             )
 
-            count = ds.count()
-            assert count >= 0  # Table might be empty but query should work
+            assert read_ds.count() == 5
 
         finally:
-            pass
+            try:
+                from gpudb import GPUdb
+
+                client = GPUdb(
+                    host=connection_params["url"],
+                    username=connection_params.get("username"),
+                    password=connection_params.get("password"),
+                )
+                client.clear_table(
+                    table_name=table_name,
+                    options={"no_error_if_not_exists": "true"},
+                )
+            except Exception:
+                pass
 
     def test_write_and_read_roundtrip(self, connection_params):
         """Test writing and reading back data."""
@@ -2052,7 +2186,10 @@ class TestKineticaFullImplementation:
                 table_name=table_name,
                 mode="overwrite",
                 table_settings=kr.KineticaTableSettings(
-                    primary_keys=["id"],
+                    # Kinetica requires shard keys to be a subset of the
+                    # primary key, so "region" (the shard key) must also be
+                    # part of the primary key here.
+                    primary_keys=["id", "region"],
                     shard_keys=["region"],
                 ),
                 batch_size=10,
